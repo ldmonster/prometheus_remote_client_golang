@@ -31,7 +31,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/m3db/prometheus_remote_client_golang/promremote"
+	"github.com/ldmonster/prometheus_remote_client_golang/promremote"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type labelList []promremote.Label
@@ -59,11 +61,49 @@ func main() {
 
 	flag.Parse()
 
+	reg := prometheus.NewRegistry()
+
+	cv := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "some_metric_name",
+		Help: "Some metric help",
+	}, []string{"first", "second", "third"})
+	reg.Register(cv)
+
+	scv := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "second_metric_name",
+		Help: "Second metric help",
+	}, []string{"one", "two", "three"})
+	reg.Register(scv)
+
 	tsList := promremote.TSList{
 		{
 			Labels:    []promremote.Label(labelsListFlag),
 			Datapoint: promremote.Datapoint(dpFlag),
 		},
+	}
+
+	cv.WithLabelValues("first", "second", "third").Inc()
+	cv.WithLabelValues("fast", "second", "third").Inc()
+	cv.WithLabelValues("first", "second", "third").Inc()
+
+	scv.WithLabelValues("one", "two", "three").Inc()
+	scv.WithLabelValues("fast", "two", "three").Inc()
+	scv.WithLabelValues("one", "two", "three").Inc()
+
+	mf, done, err := prometheus.ToTransactionalGatherer(reg).Gather()
+	defer done()
+	if err != nil {
+		log.Fatal(fmt.Errorf("unable to gather metrics: %v", err))
+	}
+
+	tss := MetricFamiliesToTimeSeries(mf)
+
+	for k, v := range tss {
+		log.Println("metric name", k)
+		for _, ts := range v {
+			log.Println("labels", ts.Labels)
+			log.Println("datapoint", ts.Datapoint)
+		}
 	}
 
 	cfg := promremote.NewConfig(
@@ -192,4 +232,74 @@ func (d *dp) Set(value string) error {
 	d.Value = val
 
 	return nil
+}
+
+// MetricFamiliesToTimeSeries converts Prometheus metric families to a map of promremote.TimeSeries
+// where the key is the metric name and the value is a slice of time series for that metric
+func MetricFamiliesToTimeSeries(
+	metricFamilies []*dto.MetricFamily,
+) map[string][]promremote.TimeSeries {
+	result := make(map[string][]promremote.TimeSeries)
+
+	for _, metricFamily := range metricFamilies {
+		metricName := metricFamily.GetName()
+		series := make([]promremote.TimeSeries, 0, len(metricFamily.Metric))
+
+		for _, metric := range metricFamily.Metric {
+			// Create labels from the metric's label pairs
+			labels := make([]promremote.Label, 0, len(metric.Label)+1) // +1 for the name label
+			for _, labelPair := range metric.Label {
+				labels = append(labels, promremote.Label{
+					Name:  labelPair.GetName(),
+					Value: labelPair.GetValue(),
+				})
+			}
+
+			// Add metric name as a label
+			labels = append(labels, promremote.Label{
+				Name:  "__name__",
+				Value: metricName,
+			})
+
+			value := 0.0
+
+			// Extract value based on metric type
+			switch {
+			case metric.GetCounter() != nil:
+				value = metric.GetCounter().GetValue()
+			case metric.GetGauge() != nil:
+				value = metric.GetGauge().GetValue()
+			case metric.GetHistogram() != nil:
+				value = metric.GetHistogram().GetSampleSum()
+				// You might want to handle histogram buckets separately here
+			case metric.GetSummary() != nil:
+				value = metric.GetSummary().GetSampleSum()
+				// You might want to handle summary quantiles separately here
+			}
+
+			// Create and add the time series
+			series = append(series, promremote.TimeSeries{
+				Labels: labels,
+				Datapoint: promremote.Datapoint{
+					Timestamp: time.Unix(0, metric.GetTimestampMs()*int64(time.Millisecond)),
+					Value:     value,
+				},
+			})
+		}
+
+		result[metricName] = series
+	}
+
+	return result
+}
+
+// FlattenTimeSeriesMap converts the map of time series to a flat slice
+func FlattenTimeSeriesMap(timeSeriesMap map[string][]promremote.TimeSeries) []promremote.TimeSeries {
+	var result []promremote.TimeSeries
+
+	for _, series := range timeSeriesMap {
+		result = append(result, series...)
+	}
+
+	return result
 }

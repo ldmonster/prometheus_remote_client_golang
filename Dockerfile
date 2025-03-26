@@ -11,7 +11,7 @@ ADD . /src/prometheus_remote_client_golang
 
 # Build cli tool binary
 RUN cd /src/prometheus_remote_client_golang && \
-    go build github.com/m3db/prometheus_remote_client_golang/cmd/promremotecli
+    go build github.com/ldmonster/prometheus_remote_client_golang/cmd/promremotecli
 
 # Stage 2: lightweight "release"
 FROM alpine:latest

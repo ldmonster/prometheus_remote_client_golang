@@ -4,7 +4,7 @@
 
 ## Installation
 
-`go get -u github.com/m3db/prometheus_remote_client_golang`
+`go get -u github.com/ldmonster/prometheus_remote_client_golang`
 
 ## Use
 
