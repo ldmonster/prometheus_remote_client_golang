@@ -61,6 +61,13 @@ func main() {
 
 	flag.Parse()
 
+	tsList := promremote.TSList{
+		{
+			Labels:    []promremote.Label(labelsListFlag),
+			Datapoint: promremote.Datapoint(dpFlag),
+		},
+	}
+
 	reg := prometheus.NewRegistry()
 
 	cv := prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -75,12 +82,13 @@ func main() {
 	}, []string{"one", "two", "three"})
 	reg.Register(scv)
 
-	tsList := promremote.TSList{
-		{
-			Labels:    []promremote.Label(labelsListFlag),
-			Datapoint: promremote.Datapoint(dpFlag),
-		},
-	}
+	requestProcessingTimeHistogramMs := prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "request_processing_time_histogram_ms",
+			// bucket every 500 ms
+			Buckets: prometheus.LinearBuckets(0, 500, 20),
+		})
+	reg.Register(requestProcessingTimeHistogramMs)
 
 	cv.WithLabelValues("first", "second", "third").Inc()
 	cv.WithLabelValues("fast", "second", "third").Inc()
@@ -89,6 +97,21 @@ func main() {
 	scv.WithLabelValues("one", "two", "three").Inc()
 	scv.WithLabelValues("fast", "two", "three").Inc()
 	scv.WithLabelValues("one", "two", "three").Inc()
+
+	tn := time.Now()
+	time.Sleep(1 * time.Second)
+	dur := time.Now().Sub(tn)
+	requestProcessingTimeHistogramMs.Observe(float64(dur.Milliseconds()))
+
+	tn = time.Now()
+	time.Sleep(2 * time.Second)
+	dur = time.Now().Sub(tn)
+	requestProcessingTimeHistogramMs.Observe(float64(dur.Milliseconds()))
+
+	tn = time.Now()
+	time.Sleep(3 * time.Second)
+	dur = time.Now().Sub(tn)
+	requestProcessingTimeHistogramMs.Observe(float64(dur.Milliseconds()))
 
 	mf, done, err := prometheus.ToTransactionalGatherer(reg).Gather()
 	defer done()
@@ -271,9 +294,15 @@ func MetricFamiliesToTimeSeries(
 				value = metric.GetGauge().GetValue()
 			case metric.GetHistogram() != nil:
 				value = metric.GetHistogram().GetSampleSum()
+				for _, v := range metric.GetHistogram().GetBucket() {
+					fmt.Println(v.String())
+				}
 				// You might want to handle histogram buckets separately here
 			case metric.GetSummary() != nil:
 				value = metric.GetSummary().GetSampleSum()
+				for _, v := range metric.GetSummary().GetQuantile() {
+					fmt.Println(v.String())
+				}
 				// You might want to handle summary quantiles separately here
 			}
 
